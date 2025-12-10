@@ -16,6 +16,7 @@ static pthread_mutex_t mmvm_lock = PTHREAD_MUTEX_INITIALIZER;
 
 int enlist_vm_freerg_list(struct mm_struct *mm, struct vm_rg_struct *rg_elmt)
 {
+  if (mm == NULL || mm->mmap == NULL || rg_elmt == NULL) return -1;
   struct vm_rg_struct *rg_node = mm->mmap->vm_freerg_list;
   if (rg_elmt->rg_start >= rg_elmt->rg_end) return -1;
   if (rg_node != NULL) rg_elmt->rg_next = rg_node;
@@ -95,8 +96,12 @@ int __free(struct pcb_t *caller, int vmaid, int rgid)
     pthread_mutex_unlock(&mmvm_lock);
     return -1;
   }
+  if (caller == NULL || caller->mm == NULL) {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
   struct vm_rg_struct *rgnode = get_symrg_byid(caller->mm, rgid);
-  if (rgnode->rg_start == 0 && rgnode->rg_end == 0) {
+  if (rgnode == NULL || (rgnode->rg_start == 0 && rgnode->rg_end == 0)) {
     pthread_mutex_unlock(&mmvm_lock);
     return -1;
   }
@@ -118,6 +123,9 @@ int liballoc(struct pcb_t *proc, addr_t size, uint32_t reg_index)
   proc->regs[reg_index] = addr;
   printf("liballoc:178\n");
   print_pgtbl(proc,0,-1);
+  if (proc != NULL && proc->mram != NULL) {
+      dump_memory_complete(proc, proc->mram, proc->active_mswp, -1, -1);
+  }
   return 0;
 }
 
@@ -127,6 +135,9 @@ int libfree(struct pcb_t *proc, uint32_t reg_index)
   proc->regs[reg_index] = 0;
   printf("libfree:218\n");
   print_pgtbl(proc,0,-1);
+  if (proc != NULL && proc->mram != NULL) {
+      dump_memory_complete(proc, proc->mram, proc->active_mswp, -1, -1);
+  }
   return 0;
 }
 
@@ -216,12 +227,15 @@ int __write(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE value
   return 0;
 }
 
-int libread(struct pcb_t *proc, uint32_t source, addr_t offset, uint32_t* destination)
+int libread(struct pcb_t *proc, uint32_t source, addr_t offset, uint32_t *destination)
 {
   BYTE data;
   if (__read(proc, 0, source, offset, &data) == 0) {
       *destination = data;
       printf("libread:426\n");
+      if (proc != NULL && proc->mram != NULL) {
+          dump_memory_complete(proc, proc->mram, proc->active_mswp, -1, -1);
+      }
       return 0;
   }
   return -1;
@@ -234,6 +248,9 @@ int libwrite(struct pcb_t *proc, BYTE data, uint32_t destination, addr_t offset)
       /* Code in ra giống mẫu */
       printf("libwrite:502\n");
       print_pgtbl(proc, 0, -1);
+      if (proc != NULL && proc->mram != NULL) {
+          dump_memory_complete(proc, proc->mram, proc->active_mswp, -1, -1);
+      }
   }
   return res;
 }
@@ -257,7 +274,9 @@ int find_victim_page(struct mm_struct *mm, addr_t *retpgn)
 
 int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_struct *newrg)
 {
+  if (caller == NULL || caller->mm == NULL) return -1;
   struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
+  if (cur_vma == NULL) return -1;
   struct vm_rg_struct *rgit = cur_vma->vm_freerg_list;
   struct vm_rg_struct *prev = NULL;
   if (rgit == NULL) return -1;

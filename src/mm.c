@@ -309,8 +309,19 @@ int dump_memory_complete(struct pcb_t *caller, struct memphy_struct *mram,
     start = cur_vma->vm_start;
   }
 
+  if (caller->mm->pgd == NULL) {
+    printf("Error: dump_memory_complete - PGD is NULL\n");
+    return -1;
+  }
+
   int pgn_start = PAGING_PGN(start);
   int pgn_end = PAGING_PGN(end);
+  
+  // Bounds check
+  if (pgn_start < 0 || pgn_end < 0 || pgn_start >= PAGING_MAX_PGN || pgn_end > PAGING_MAX_PGN) {
+    printf("Error: dump_memory_complete - Invalid page range\n");
+    return -1;
+  }
   
   printf("\n=== Memory Dump with Page Tables ===\n");
   printf("Process PID: %d\n", caller->pid);
@@ -321,7 +332,7 @@ int dump_memory_complete(struct pcb_t *caller, struct memphy_struct *mram,
   int mapped_count = 0;
   int swapped_count = 0;
 
-  for (pgit = pgn_start; pgit < pgn_end; pgit++) {
+  for (pgit = pgn_start; pgit < pgn_end && pgit < PAGING_MAX_PGN; pgit++) {
     uint32_t pte = caller->mm->pgd[pgit];
 
     if (pte == 0) continue; // Skip unmapped pages
@@ -338,20 +349,25 @@ int dump_memory_complete(struct pcb_t *caller, struct memphy_struct *mram,
         if (pte & PAGING_PTE_DIRTY_MASK) printf(" [Dirty]");
         printf("\n  Status: SWAPPED to Swap Frame %d\n", (int)swpfpn);
         
-        // Optionally dump from swap space
-        if (mswp != NULL) {
-          printf("  Swap Frame Content:\n");
+        // Optionally dump from swap space with bounds checking
+        if (mswp != NULL && mswp->storage != NULL) {
           addr_t swap_base = swpfpn * PAGING_PAGESZ;
-          int i;
-          for (i = 0; i < PAGING_PAGESZ && i < 64; i++) { // Limit output
-            BYTE data;
-            if (MEMPHY_read(mswp, swap_base + i, &data) == 0) {
-              if (i % 16 == 0) printf("    %04x:", i);
-              printf(" %02x", (unsigned char)data);
-              if (i % 16 == 15) printf("\n");
+          // Validate swap frame number is within bounds
+          if (swap_base < mswp->maxsz && (swap_base + PAGING_PAGESZ) <= mswp->maxsz) {
+            printf("  Swap Frame Content:\n");
+            int i;
+            for (i = 0; i < PAGING_PAGESZ && i < 64; i++) { // Limit output
+              BYTE data;
+              if (MEMPHY_read(mswp, swap_base + i, &data) == 0) {
+                if (i % 16 == 0) printf("    %04x:", i);
+                printf(" %02x", (unsigned char)data);
+                if (i % 16 == 15) printf("\n");
+              }
             }
+            if (i < PAGING_PAGESZ) printf("    ... (truncated)\n");
+          } else {
+            printf("  Warning: Invalid swap frame number (out of bounds)\n");
           }
-          if (i < PAGING_PAGESZ) printf("    ... (truncated)\n");
         }
         swapped_count++;
       } else {
@@ -361,18 +377,25 @@ int dump_memory_complete(struct pcb_t *caller, struct memphy_struct *mram,
         if (pte & PAGING_PTE_DIRTY_MASK) printf(" [Dirty]");
         printf("\n  Physical Frame %d:\n", (int)fpn);
         
-        // Dump physical frame content
-        addr_t phy_base = fpn * PAGING_PAGESZ;
-        int i;
-        for (i = 0; i < PAGING_PAGESZ && i < 64; i++) { // Limit output
-          BYTE data;
-          if (MEMPHY_read(mram, phy_base + i, &data) == 0) {
-            if (i % 16 == 0) printf("    %04x:", i);
-            printf(" %02x", (unsigned char)data);
-            if (i % 16 == 15) printf("\n");
+        // Dump physical frame content with bounds checking
+        if (mram != NULL && mram->storage != NULL) {
+          addr_t phy_base = fpn * PAGING_PAGESZ;
+          // Validate frame number is within bounds
+          if (phy_base < mram->maxsz && (phy_base + PAGING_PAGESZ) <= mram->maxsz) {
+            int i;
+            for (i = 0; i < PAGING_PAGESZ && i < 64; i++) { // Limit output
+              BYTE data;
+              if (MEMPHY_read(mram, phy_base + i, &data) == 0) {
+                if (i % 16 == 0) printf("    %04x:", i);
+                printf(" %02x", (unsigned char)data);
+                if (i % 16 == 15) printf("\n");
+              }
+            }
+            if (i < PAGING_PAGESZ) printf("    ... (truncated)\n");
+          } else {
+            printf("  Warning: Invalid frame number (out of bounds)\n");
           }
         }
-        if (i < PAGING_PAGESZ) printf("    ... (truncated)\n");
         mapped_count++;
       }
     } else {
